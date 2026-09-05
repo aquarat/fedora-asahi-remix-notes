@@ -27,7 +27,7 @@ project write-ups under `projects/`. Add a row above for each.
 | [aquarat/apple-avd-driver](https://github.com/aquarat/apple-avd-driver) (private) | The Apple AVD V4L2 kernel driver as an out-of-tree module tree with the local fixes on top of asahi-7.1.6-1. |
 | [aquarat/FFmpeg](https://github.com/aquarat/FFmpeg) | FFmpeg fork. `master` tracks upstream; `v4l2-request-n8.1` is Kwiboo's hwaccel base and `avd-readback`/`avd-readback-vk` carry the local V4L2 and Vulkan patches. |
 | [aquarat/frigate](https://github.com/aquarat/frigate) | Frigate fork; `apple-avd-vulkan` carries the presets and the detector retry. |
-| [aquarat/MNN](https://github.com/aquarat/MNN) (private) | MNN mirror with the GCC 16 build fix. |
+| [aquarat/MNN](https://github.com/aquarat/MNN) (private) | MNN mirror for the one-line GCC 16 build fix (`gcc16-build-fix`). Repository created; the push is pending a token with the `workflow` scope, so until then the fix lives as a patch in `frigate-asahi`. |
 | this repository | The index. |
 
 ## Conventions

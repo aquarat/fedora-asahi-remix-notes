@@ -41,7 +41,7 @@ failures for these workloads.
 | [aquarat/apple-avd-driver](https://github.com/aquarat/apple-avd-driver) (private) | The AVD kernel driver as a standalone out-of-tree module tree. `main` = pristine asahi-7.1.6-1 driver + the eight patches; experiment branches kept for the record. |
 | [aquarat/FFmpeg](https://github.com/aquarat/FFmpeg) branches `avd-readback`, `avd-readback-vk` (base `v4l2-request-n8.1` = Kwiboo's out-of-tree V4L2 Request hwaccel) | Four ffmpeg patches: cacheable V4L2 capture buffers (2), Vulkan import of linear multi-plane DRM frames, Honeykrisp plane-offset workaround. |
 | [aquarat/frigate](https://github.com/aquarat/frigate) branch `apple-avd-vulkan` | ZMQ detector handshake retry; `preset-apple-avd` / `preset-apple-avd-vulkan` ffmpeg presets. |
-| [aquarat/MNN](https://github.com/aquarat/MNN) branch `gcc16-build-fix` | One-line CMake fix so MNN builds with GCC 16 (used for the alternative `mnn-vulkan` detector backend). |
+| [aquarat/MNN](https://github.com/aquarat/MNN) branch `gcc16-build-fix` (push pending: needs a `workflow`-scoped token because MNN's history carries GitHub workflow files) | One-line CMake fix so MNN builds with GCC 16 (used for the alternative `mnn-vulkan` detector backend). |
 
 Inside `frigate-asahi`, start with `REPORT.md`; the per-topic evidence is
 `research/GPU_INFERENCE.md` (runtimes compared), `research/AVD_ROOTCAUSE.md`
