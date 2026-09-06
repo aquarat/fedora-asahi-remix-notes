@@ -109,3 +109,23 @@ were written. Turning that into an Immich backend is separate, ongoing work.
   shaders are compiled in and selected at runtime) and which would lift the
   scalar fp16 GEMMs that cap both ViT-H at 23% of peak and, presumably, any
   compute-heavy game shader doing matrix work.
+
+
+## Deployed (2026-09-06)
+
+* The NVR's object detector now runs MNN-Vulkan fp16 with the batch-recording
+  fix as its live backend: ~18 ms round trip (p95 24 ms on a shared GPU) in
+  place of ncnn-Vulkan's ~31 ms; outputs bit-identical to the unpatched MNN path.
+* Immich's machine-learning service runs natively with the ggml-Vulkan CLIP
+  backend on the same machine: ViT-H-14-378 embeddings in 1.8–1.9 s instead of
+  3.2 s (ORT CPU); text, faces and OCR unchanged on ONNX Runtime; 1.1–1.7 GB
+  less resident memory.
+* GPU-sharing lesson: with ggml's default submission size, a burst of ViT-H
+  embeddings pushed 88 % of the detector's requests past its 200 ms budget.
+  `GGML_VK_MAX_NODES_PER_SUBMIT=1` bounds each submission so the driver can
+  interleave the detector's work: detector p95 42–47 ms during the burst, CLIP
+  1 % slower. Honeykrisp time-slices at control-stream granularity, so a
+  long-running compute client on a shared GPU needs small submissions.
+* The Immich backend is preserved as patches in `gpu-inference-asahi/immich/`;
+  Immich's contribution policy (discussion first, no LLM-generated PRs) keeps it
+  a local deployment for now.
