@@ -54,3 +54,4 @@ pulled a Mesa point upgrade (26.1.4 → 26.1.8) across the board.
 ## Project write-ups on this machine
 
 * [Frigate NVR: Vulkan object detection and Apple AVD hardware decode](../projects/frigate-avd-vulkan.md)
+* [GPU inference on Honeykrisp: driver cost, runtime cost, ggml for transformers](../projects/gpu-inference-vulkan.md)
