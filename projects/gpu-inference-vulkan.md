@@ -76,6 +76,7 @@ were written. Turning that into an Immich backend is separate, ongoing work.
 | [aquarat/gpu-inference-asahi](https://github.com/aquarat/gpu-inference-asahi) (private) | This thread: the MNN and ncnn patches (`git am` on `bef71b9` / tag `20260526`), the ggml CLIP converter and runner with build notes for llama.cpp `9e0e220`, the chain test and per-process driver loading, benchmark sources, the three write-ups and the raw logs. Start with its `README.md`. |
 | [aquarat/frigate-asahi](https://github.com/aquarat/frigate-asahi) | The NVR deployment and the first round of runtime evaluation (`research/GPU_INFERENCE.md`: ncnn/MNN/IREE/OpenCL compared; `research/GPU_RESCALE.md`: zero-copy Vulkan scaling of decoded frames), the host detector service these patches target. |
 | [aquarat/got-bringup](https://github.com/aquarat/got-bringup), [aquarat/mesa](https://github.com/aquarat/mesa) `local-deploy` | The driver fork that was measured, its RPM, the `cstest`/`coherence` tests reused unchanged. |
+| [aquarat/mesa](https://github.com/aquarat/mesa) `coopmat` | `local-deploy` + three commits: `VK_KHR_cooperative_matrix` for Honeykrisp on the G13 SIMD-group matrix FMA, the native mixed f16/f32 form, the register-allocation fix. Patches and write-up in `gpu-inference-asahi/mesa/`, `reports/PHASE4_COOPMAT.md`. |
 | [aquarat/apple-avd-driver](https://github.com/aquarat/apple-avd-driver) | The other half of the GPU pipeline on this machine: the AVD decoder driver whose output the Vulkan scalers consume. |
 | [aquarat/FFmpeg](https://github.com/aquarat/FFmpeg) `avd-readback`, `avd-readback-vk` | The ffmpeg side of that pipeline (cacheable capture buffers, Vulkan DRM import). |
 | [aquarat/MNN](https://github.com/aquarat/MNN) (private, empty) | Intended home for the MNN branches (`gcc16-build-fix`, the batch-recording default). Still pending a `workflow`-scoped token: MNN's history carries `.github/workflows` files, which GitHub refuses from a `repo`-only token. The same commits are the patch files in `gpu-inference-asahi/mnn/`. |
@@ -108,8 +109,98 @@ were written. Turning that into an Immich backend is separate, ongoing work.
   support in Honeykrisp, which ggml would pick up automatically (its coopmat
   shaders are compiled in and selected at runtime) and which would lift the
   scalar fp16 GEMMs that cap both ViT-H at 23% of peak and, presumably, any
-  compute-heavy game shader doing matrix work.
+  compute-heavy game shader doing matrix work. (Done the same day: see the
+  cooperative-matrix section below.)
 
+
+## Cooperative matrix on Honeykrisp (2026-09-06)
+
+The item the previous section ended on. `VK_KHR_cooperative_matrix` is now
+advertised by a private Honeykrisp build (aquarat/mesa branch `coopmat`,
+three commits on `local-deploy` @ `d105715`; the patches are in
+`gpu-inference-asahi/mesa/`, the write-up in its `reports/PHASE4_COOPMAT.md`).
+Built in a Fedora 44 container, loaded per process through
+`VK_DRIVER_FILES`, never installed; the NVR's detector stayed on the system
+Mesa 26.1.8 throughout, with zero fallbacks and nothing in `dmesg`.
+
+**ISA facts.** The G13 (M1) has an 8x8x8 SIMD-group matrix multiply-accumulate,
+`simd_matrix_fmadd16` / `simd_matrix_fmadd32`, the instruction behind Metal's
+`simdgroup_matrix` (available from Apple GPU family 7, i.e. A14/M1). Its
+encoding is public: dougallj's `applegpu` disassembler (commit `70738db`,
+"Add simdgroup matrix operations", 2022, reverse-engineered on an M1) gives
+both variants, opcode byte `0x6f` in the same family as `simd_shuffle`, with
+"paired" operands: every operand is two consecutive registers per lane, the
+two elements that lane owns. Which two comes from Metal's `thread_elements()`
+layout as documented in philipturner's metal-flash-attention
+(`simdgroup_matrix_storage::morton_order`, citing Apple patent US11256518B2):
+the 8x8 tile is four 4x4 quadrants of eight lanes, lane pairs walk the rows,
+each lane holds two horizontally adjacent elements, and all four operands
+use the same layout, so loads and stores are pure address arithmetic. It is
+not a separate matrix unit on M1: per philipturner's metal-benchmarks it runs
+on the FMA ALUs (Apple's GEMMs on it reach ~80 % of the FP32 FMA peak, against
+~30 % for a good scalar kernel), so the ceiling is the same 2.6 TFLOPS and the
+win is utilisation. f16 and f32 only; no integer or bf16 variant on this
+generation. Upstream Mesa had nothing for it (no opcode, no TODO), only a
+user wish-list issue referenced in the 25.2 release notes.
+
+**Mixed precision is native.** The one undocumented question was whether the
+per-operand size flags may be mixed. They may: f16 register pairs for A and B
+with an f32 pair for C/D, and instruction bit 26 (the 16/32 select) set from
+the accumulator, is bit-exact and accumulates in true f32. A probe with
+A = B = 0.125, C = 4096 returns 4096.125 exactly where an f16 accumulator
+rounds it to 4096. That is the shape ggml prefers (f16/f16/f32/f32) and it
+costs nothing over the all-f32 form.
+
+**The register-allocator bug.** MUL_MAT was 1106/1106 on the first hardware
+build but ggml's flash-attention shader gave cosine 0.66-0.89. A 30-line
+reproduction (shared-memory staging with a padded row stride) showed one
+output block wrong with every input tile correct; the difference was the
+register assignment. AGX's allocator "early-kills" a source whose last use
+is the current instruction and reuses it for the destination, which is fine
+for a normal ALU op but not for a multi-cycle SIMD-group op that keeps
+reading A and B while it writes D. Accumulating in place (D over C) had always
+worked. `can_kill_early()` now refuses sources 0 and 1 of `simd_matrix_fmadd`.
+Lesson kept: an op that is correct in the GEMM oracle can still be broken by
+register pressure elsewhere; the padded-stride "clue" was a red herring.
+
+**Numbers**, all with the NVR live on the same GPU (`nice`, GPU runs kept
+short, the detector checked healthy before each):
+
+| workload | stock 26.1.8 | private build, coopmat off | private build, coopmat on |
+|---|---:|---:|---:|
+| llama-bench Qwen2.5-0.5B Q8_0 pp512 | 779-783 t/s | 784 t/s | **1046-1055 t/s** (~1.04 TFLOPS, 40 % of FMA peak) |
+| same, F16 pp512 | 757-783 t/s | 763-774 t/s | **1016-1046 t/s** |
+| token generation (tg128) | 44-52 t/s | 40-47 t/s | 54 t/s (memory-bound, noise) |
+| CLIP ViT-H-14-378, one image, standalone runner, fa=0 / fa=1 | 1874 / 1776 ms | 1837 ms (fa=1) | **1505** / 1578 ms |
+
+Cosine against ORT fp32 unchanged at 0.9987-0.9991. ggml's coopmat1
+flash-attention shader is slower than its non-FA path once the GEMMs use the
+matrix instruction, so for ViT-H `fa=0` is now the better setting. The
+lowering is unoptimised (two scalar loads per lane per tile; ggml's warptile
+sizes are the generic-vendor defaults), which is where the remaining gap to
+Apple's ~80 % lives.
+
+**Deployed.** Immich's ML service on the Mac mini now runs on this build, and
+only it: two `Environment=VK_DRIVER_FILES=... / VK_ICD_FILENAMES=...` lines in
+its unit point at a copy of the `.so` and its ICD json (with a provenance
+note), nothing under `/usr` changes, and the NVR's detector on the same GPU
+keeps the system driver (`/proc/<pid>/maps` checked for both). Re-measured in
+the service with the GPU otherwise quiet: ViT-H image embedding **1.80 -> 1.53 s**
+(the combined clip+faces+ocr request 2.21 -> ~1.95 s), with flash-attention
+switched off since it now loses 4 % (on the stock driver it won 9 %); cosine
+0.9999 against the stock driver, text and faces unchanged. The GPU-sharing
+check from the previous section still holds: during a 5-image burst the
+detector's p95 is 36 ms with 0 timeouts (`GGML_VK_MAX_NODES_PER_SUBMIT=1`
+unchanged). Rollback is deleting the two lines and restarting.
+
+**What remains.** The Vulkan CTS group `dEQP-VK.compute.cooperative_matrix.*`
+has not been run (no deqp build fits next to the NVR), so the coverage is the
+standalone test plus ggml's oracles: layouts, both element types, mixed
+precision, tile composition, but not `cmat_extract/insert` element order or
+robustness. Then vectorised tile loads/stores (or a transposed-register form
+for column-major operands), ggml-side tile tuning for a ~20-cycle 8x8x8 op,
+a post-RA validator check for the D-over-A/B rule, and, for an upstream MR,
+stating that the encoding is reverse-engineered and untested by CTS.
 
 ## Deployed (2026-09-06)
 
